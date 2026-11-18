@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NEC Delay Tracker</title>
+<style>
+  :root {
+    --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --card: #fff;
+    --ok: #dcfce7; --warn: #fef3c7; --bad: #fee2e2; --empty: transparent;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --card: #292524;
+            --ok: #14532d; --warn: #713f12; --bad: #7f1d1d; }
+  }
+  body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg);
+         font: 14px/1.4 system-ui, -apple-system, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 28px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .controls { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  select { font: inherit; padding: 4px 6px; background: var(--card); color: var(--fg);
+           border: 1px solid var(--line); border-radius: 6px; }
+  .wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 8px; text-align: center; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; position: sticky; left: 0; background: var(--card); }
+  thead th { font-weight: 600; color: var(--muted); }
+  td small { display: block; color: var(--muted); font-size: 11px; }
+  tr.all td { font-weight: 600; }
+  .ok { background: var(--ok); } .warn { background: var(--warn); } .bad { background: var(--bad); }
+  .legend { color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>NEC Delay Tracker</h1>
+  <p class="sub" id="sub">Loading…</p>
+
+  <div class="controls">
+    <label>Trains <select id="route">
+      <option value="">Acela + Regional</option><option>Acela</option><option>Regional</option>
+    </select></label>
+    <label>Count as late at <select id="threshold">
+      <option>5</option><option>10</option><option>15</option>
+    </select> min</label>
+  </div>
+
+  <div id="tables"></div>
+  <p class="legend">Each cell: % of arrivals late, with the average delay in minutes and the number of arrivals recorded underneath.
+    Hover a cell for details. Delay = actual arrival − timetable arrival (at a train's origin, departure).</p>
+</main>
+
+<script>
+const STATIONS = ["WAS", "BAL", "WIL", "PHL", "NWK", "NYP", "STM", "NHV", "PVD", "BOS"];
+let rows = [];
+
+async function load() {
+  const text = await (await fetch("data/arrivals.csv", { cache: "no-store" })).text();
+  const [header, ...lines] = text.trim().split(/\r?\n/);
+  const keys = header.split(",");
+  rows = lines.filter(Boolean).map(l => {
+    const r = Object.fromEntries(l.split(",").map((v, i) => [keys[i], v]));
+    r.delay = Number(r.delay_min);
+    return r;
+  });
+  const dates = new Set(rows.map(r => r.origin_date));
+  const last = rows.reduce((m, r) => (r.actual > m ? r.actual : m), "");
+  document.getElementById("sub").textContent =
+    `${rows.length} arrivals from ${dates.size} day${dates.size === 1 ? "" : "s"} of service` +
+    (last ? ` · latest ${new Date(last).toLocaleString()}` : "");
+  render();
+}
+
+function stats(list, threshold) {
+  if (!list.length) return null;
+  const late = list.filter(r => r.delay >= threshold).length;
+  const avg = list.reduce((s, r) => s + r.delay, 0) / list.length;
+  return { n: list.length, pct: Math.round((100 * late) / list.length), avg: Math.round(avg),
+           max: Math.max(...list.map(r => r.delay)) };
+}
+
+function cell(s) {
+  if (!s) return "<td></td>";
+  const cls = s.pct < 20 ? "ok" : s.pct < 50 ? "warn" : "bad";
+  const avg = (s.avg > 0 ? "+" : "") + s.avg;
+  return `<td class="${cls}" title="${s.n} arrivals · avg ${avg} min · worst +${s.max} min">` +
+         `${s.pct}%<small>${avg}m · n=${s.n}</small></td>`;
+}
+
+function table(title, list, stations, threshold) {
+  const trains = [...new Set(list.map(r => r.train))].sort((a, b) => a - b);
+  if (!trains.length) return "";
+  const routeOf = Object.fromEntries(list.map(r => [r.train, r.route]));
+  const at = (l, st) => l.filter(r => r.station === st);
+  let html = `<h2>${title}</h2><div class="wrap"><table><thead><tr><th>Train</th>` +
+             stations.map(s => `<th>${s}</th>`).join("") + "</tr></thead><tbody>";
+  html += `<tr class="all"><td>All trains</td>` +
+          stations.map(st => cell(stats(at(list, st), threshold))).join("") + "</tr>";
+  for (const t of trains) {
+    const mine = list.filter(r => r.train === t);
+    html += `<tr><td>${routeOf[t]} ${t}</td>` +
+            stations.map(st => cell(stats(at(mine, st), threshold))).join("") + "</tr>";
+  }
+  return html + "</tbody></table></div>";
+}
+
+function render() {
+  const route = document.getElementById("route").value;
+  const threshold = Number(document.getElementById("threshold").value);
+  const list = rows.filter(r => !route || r.route === route);
+  // Amtrak NEC numbering: even = northbound (toward Boston), odd = southbound.
+  const north = list.filter(r => Number(r.train) % 2 === 0);
+  const south = list.filter(r => Number(r.train) % 2 === 1);
+  document.getElementById("tables").innerHTML =
+    (table("Northbound · Washington → Boston", north, STATIONS, threshold) +
+     table("Southbound · Boston → Washington", south, [...STATIONS].reverse(), threshold)) ||
+    "<p>No arrivals recorded yet.</p>";
+}
+
+document.getElementById("route").onchange = render;
+document.getElementById("threshold").onchange = render;
+load().catch(e => (document.getElementById("sub").textContent = "Could not load data: " + e));
+</script>
+</body>
+</html>
