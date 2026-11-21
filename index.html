@@ -42,6 +42,17 @@
     <label>Trains <select id="route">
       <option value="">Acela + Regional</option><option>Acela</option><option>Regional</option>
     </select></label>
+    <label>Month <select id="month"><option value="">All</option></select></label>
+    <label>Day <select id="dow">
+      <option value="">All</option><option value="1">Mon</option><option value="2">Tue</option>
+      <option value="3">Wed</option><option value="4">Thu</option><option value="5">Fri</option>
+      <option value="6">Sat</option><option value="0">Sun</option>
+    </select></label>
+    <label>Time <select id="block">
+      <option value="">All day</option><option value="0">12am–4am</option><option value="1">4am–8am</option>
+      <option value="2">8am–12pm</option><option value="3">12pm–4pm</option><option value="4">4pm–8pm</option>
+      <option value="5">8pm–12am</option>
+    </select></label>
     <label>Count as late at <select id="threshold">
       <option>5</option><option>10</option><option>15</option>
     </select> min</label>
@@ -49,7 +60,7 @@
 
   <div id="tables"></div>
   <p class="legend">Each cell: % of arrivals late, with the average delay in minutes and the number of arrivals recorded underneath.
-    Hover a cell for details. Delay = actual arrival − timetable arrival (at a train's origin, departure).</p>
+    Hover a cell for details. Month, day and time filters use the timetable time at each station (Eastern). Delay = actual arrival − timetable arrival (at a train's origin, departure).</p>
 </main>
 
 <script>
@@ -63,8 +74,18 @@ async function load() {
   rows = lines.filter(Boolean).map(l => {
     const r = Object.fromEntries(l.split(",").map((v, i) => [keys[i], v]));
     r.delay = Number(r.delay_min);
+    // Filters use the timetable time at the station, in station-local (Eastern) time.
+    const [y, m, d] = r.scheduled.slice(0, 10).split("-").map(Number);
+    r.month = r.scheduled.slice(0, 7);
+    r.dow = String(new Date(y, m - 1, d).getDay());
+    r.block = String(Math.floor(Number(r.scheduled.slice(11, 13)) / 4));
     return r;
   });
+  const monthSel = document.getElementById("month");
+  for (const mo of [...new Set(rows.map(r => r.month))].sort()) {
+    const [y, m] = mo.split("-").map(Number);
+    monthSel.add(new Option(new Date(y, m - 1).toLocaleString("en-US", { month: "short", year: "numeric" }), mo));
+  }
   const dates = new Set(rows.map(r => r.origin_date));
   const last = rows.reduce((m, r) => (r.actual > m ? r.actual : m), "");
   document.getElementById("sub").textContent =
@@ -109,18 +130,19 @@ function table(title, list, stations, threshold) {
 function render() {
   const route = document.getElementById("route").value;
   const threshold = Number(document.getElementById("threshold").value);
-  const list = rows.filter(r => !route || r.route === route);
+  const f = id => document.getElementById(id).value;
+  const list = rows.filter(r => (!route || r.route === route) && (!f("month") || r.month === f("month")) &&
+                                (!f("dow") || r.dow === f("dow")) && (!f("block") || r.block === f("block")));
   // Amtrak NEC numbering: even = northbound (toward Boston), odd = southbound.
   const north = list.filter(r => Number(r.train) % 2 === 0);
   const south = list.filter(r => Number(r.train) % 2 === 1);
   document.getElementById("tables").innerHTML =
     (table("Northbound · Washington → Boston", north, STATIONS, threshold) +
      table("Southbound · Boston → Washington", south, [...STATIONS].reverse(), threshold)) ||
-    "<p>No arrivals recorded yet.</p>";
+    "<p>No arrivals match these filters.</p>";
 }
 
-document.getElementById("route").onchange = render;
-document.getElementById("threshold").onchange = render;
+for (const id of ["route", "month", "dow", "block", "threshold"]) document.getElementById(id).onchange = render;
 load().catch(e => (document.getElementById("sub").textContent = "Could not load data: " + e));
 </script>
 </body>
